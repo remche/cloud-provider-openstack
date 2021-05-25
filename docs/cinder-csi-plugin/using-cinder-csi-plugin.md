@@ -14,6 +14,7 @@
     - [Using the manifests](#using-the-manifests)
     - [Using the Helm chart](#using-the-helm-chart)
   - [Supported Features](#supported-features)
+  - [Sidecar Compatibility](#sidecar-compatibility)
   - [Supported Parameters](#supported-parameters)
   - [Local Development](#local-development)
     - [Build](#build)
@@ -30,7 +31,7 @@ The Cinder CSI Driver is a CSI Specification compliant driver used by Container 
 
 ## CSI Compatibility
 
-This plugin is compatible with CSI versions v1.2.0 , v1.1.0, and v1.0.0
+This plugin is compatible with CSI versions v1.3.0, v1.2.0 , v1.1.0, and v1.0.0
 
 ## Downloads
 
@@ -174,9 +175,13 @@ helm install --namespace kube-system --name cinder-csi ./charts/cinder-csi-plugi
 * [Multiattach Volumes](./features.md#multi-attach-volumes)
 * [Liveness probe](./features.md#liveness-probe)
 
+## Sidecar Compatibility
+
+* [Set file type in provisioner](./sidecarcompatibility.md#set-file-type-in-provisioner)
+
 ## Supported Parameters
 
-| Parameter Type             | Paramerter Name       |   Default       |Description      |
+| Parameter Type             | Parameter Name       |   Default       |Description      |
 |-------------------------   |-----------------------|-----------------|-----------------|
 | StorageClass `parameters`  | `availability`          | `nova`          | String. Volume Availability Zone |
 | StorageClass `parameters`  | `type`                  | Empty String    | String. Name/ID of Volume type. Corresponding volume type should exist in cinder     |

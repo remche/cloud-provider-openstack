@@ -14,6 +14,9 @@
     - [Metadata](#metadata)
   - [Exposing applications using services of LoadBalancer type](#exposing-applications-using-services-of-loadbalancer-type)
   - [Metrics](#metrics)
+  - [Limitation](#limitation)
+    - [OpenStack availability zone must not contain blank](#openstack-availability-zone-must-not-contain-blank)
+    - [externalTrafficPolicy support](#externaltrafficpolicy-support)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -25,7 +28,7 @@ External cloud providers were introduced as an Alpha feature in Kubernetes relea
 
 For more information about cloud-controller-manager, please see:
 
-- <https://github.com/kubernetes/enhancements/blob/master/keps/sig-cloud-provider/20180530-cloud-controller-manager.md>
+- <https://github.com/kubernetes/enhancements/tree/master/keps/sig-cloud-provider/2392-cloud-controller-manager>
 - <https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/#running-cloud-controller-manager>
 - <https://kubernetes.io/docs/tasks/administer-cluster/developing-cloud-controller-manager/>
 
@@ -86,8 +89,12 @@ Implementation of openstack-cloud-controller-manager relies on several OpenStack
 | Compute (Nova)                 | v2             | No         | Yes      |
 | Load Balancing (Neutron-LBaaS) | v1, v2         | Yes        | No       |
 | Load Balancing (Octavia)       | v2             | No         | Yes      |
+| Key Manager (Barbican)         | v1             | No         | No       |
 
-> NOTE: Block Storage is not needed for openstack-cloud-controller-manager in favor of [cinder-csi-plugin](./cinder-csi-plugin/using-cinder-csi-plugin.md).
+NOTE:
+
+* Block Storage is not needed for openstack-cloud-controller-manager in favor of [cinder-csi-plugin](../cinder-csi-plugin/using-cinder-csi-plugin.md).
+* Barbican is required to support creating Service of LoadBalancer type with TLS termination.
 
 ### Global
 
@@ -95,6 +102,9 @@ The options in `Global` section are used for openstack-cloud-controller-manager 
 
 * `auth-url`
   Required. Keystone service URL, e.g. http://128.110.154.166/identity
+* `os-endpoint-type`
+  Optional. Specify which type of endpoint to use from the service catalog.
+  If not set, public endpoints are used.
 * `ca-file`
   Optional. CA certificate bundle file for communication with Keystone service, this is required when using the https protocol in the Keystone service URL.
 * `cert-file`
@@ -134,7 +144,7 @@ The options in `Global` section are used for openstack-cloud-controller-manager 
 * `use-clouds`
   Set this option to `true` to get authorization credentials from a clouds.yaml file. Options explicitly set in this section are prioritized over values read from clouds.yaml, the file path can be set in `clouds-file` option. Otherwise, the following order is applied:
   1. A file path stored in the environment variable `OS_CLIENT_CONFIG_FILE`
-  2. The directory `pkg/cloudprovider/providers/openstack/`
+  2. The directory `pkg/openstack`
   3. The directory `~/.config/openstack`
   4. The directory `/etc/openstack`
 * `clouds-file`
@@ -172,11 +182,17 @@ Although the openstack-cloud-controller-manager was initially implemented with N
 * `floating-subnet-id`
   Optional. The external network subnet used to create floating IP for the load balancer VIP. Can be overridden by the Service annotation `loadbalancer.openstack.org/floating-subnet-id`.
 
+* `floating-subnet`
+  Optional. A name pattern (glob or regexp if starting with `~`) for the external network subnet used to create floating IP for the load balancer VIP. Can be overridden by the Service annotation `loadbalancer.openstack.org/floating-subnet`. If multiple subnets match the first one with still available IPs is used. 
+
+* `floating-subnet-tags`
+  Optional. Tags for the external network subnet used to create floating IP for the load balancer VIP. Can be overridden by the Service annotation `loadbalancer.openstack.org/floating-subnet-tags`. If multiple subnets match the first one with still available IPs is used. 
+
 * `lb-method`
   The load balancing algorithm used to create the load balancer pool. The value can be `ROUND_ROBIN`, `LEAST_CONNECTIONS`, or `SOURCE_IP`. Default: `ROUND_ROBIN`
 
 * `lb-provider`
-  Optional. Used to specify the provider of the load balancer, e.g. "amphora" or "octavia".
+  Optional. Used to specify the provider of the load balancer, e.g. "amphora" or "octavia". Only "amphora" or "octavia" provider are officially tested, other provider will cause a warning log.
 
 * `lb-version`
   Optional. If specified, only "v2" is supported.
@@ -221,8 +237,21 @@ Although the openstack-cloud-controller-manager was initially implemented with N
 
   * floating-network-id. The same with `floating-network-id` option above.
   * floating-subnet-id. The same with `floating-subnet-id` option above.
+  * floating-subnet. The same with `floating-subnet` option above.
+  * floating-subnet-tags. The same with `floating-subnet-tags` option above.
   * network-id. The same with `network-id` option above.
   * subnet-id. The same with `subnet-id` option above.
+  
+* `enable-ingress-hostname`
+
+  Used with proxy protocol (set by annotation `loadbalancer.openstack.org/proxy-protocol: "true"`) by adding a dns suffix (nip.io) to the load balancer IP address. Default false.
+
+  This option is currently a workaround for the issue https://github.com/kubernetes/ingress-nginx/issues/3996, should be removed or refactored after the Kubernetes [KEP-1860](https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/1860-kube-proxy-IP-node-binding) is implemented.
+
+* `default-tls-container-ref`
+  Reference to a tls container. This option works with Octavia, when this option is set then the cloud provider will create an Octavia Listener of type TERMINATED_HTTPS for a TLS Terminated loadbalancer.
+
+  Format for tls container ref: `https://{keymanager_host}/v1/containers/{uuid}`
 
 ### Metadata
 
@@ -241,3 +270,15 @@ Refer to [Exposing applications using services of LoadBalancer type](./expose-ap
 ## Metrics
 
 Refer to [Metrics for openstack-cloud-controller-manager](../metrics.md)
+
+## Limitation
+
+### OpenStack availability zone must not contain blank
+
+`topology.kubernetes.io/zone` is used to label node and its value comes from availability zone of the node, according to [label spec](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set) it does not support blank (' ') but OpenStack availability zone supports blank. So your OpenStack availability zone must not contain blank otherwise it will lead to node that belongs to this availability zone register failure, see [#1379](https://github.com/kubernetes/cloud-provider-openstack/issues/1379) for further information.
+
+### externalTrafficPolicy support
+
+`externalTrafficPolicy` denotes if this Service desires to route external traffic to node-local or cluster-wide endpoints. "Local" preserves the client source IP and avoids a second hop for LoadBalancer and Nodeport type services, but risks potentially imbalanced traffic spreading. "Cluster" obscures the client source IP and may cause a second hop to another node, but should have good overall load-spreading.
+
+openstack-cloud-controller-manager only supports `externalTrafficPolicy: Cluster` for now.

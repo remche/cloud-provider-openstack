@@ -29,6 +29,7 @@ import (
 
 	"k8s.io/klog/v2"
 
+	"k8s.io/cloud-provider-openstack/pkg/util"
 	"k8s.io/cloud-provider-openstack/pkg/util/mount"
 	"k8s.io/utils/exec"
 )
@@ -62,6 +63,12 @@ var MetadataService IMetadata
 
 // Metadata is fixed for the current host, so cache the value process-wide
 var metadataCache *Metadata
+
+// MetadataOpts is used for configuring how to talk to metadata service or config drive
+type MetadataOpts struct {
+	SearchOrder    string          `gcfg:"search-order"`
+	RequestTimeout util.MyDuration `gcfg:"request-timeout"`
+}
 
 // DeviceMetadata is a single/simplified data structure for all kinds of device metadata types.
 type DeviceMetadata struct {
@@ -200,7 +207,7 @@ func getFromMetadataService(metadataVersion string) (*Metadata, error) {
 }
 
 // GetDevicePath retrieves device path from metadata service
-func GetDevicePath(volumeID string) string {
+func GetDevicePath(volumeID string) (string, error) {
 	// Nova Hyper-V hosts cannot override disk SCSI IDs. In order to locate
 	// volumes, we're querying the metadata service. Note that the Hyper-V
 	// driver will include device metadata for untagged volumes as well.
@@ -208,10 +215,9 @@ func GetDevicePath(volumeID string) string {
 	// We're avoiding using cached metadata (or the configdrive),
 	// relying on the metadata service.
 	instanceMetadata, err := getFromMetadataService(defaultMetadataVersion)
-
 	if err != nil {
-		klog.V(4).Infof("Could not retrieve instance metadata. Error: %v", err)
-		return ""
+		klog.Errorf("Could not retrieve instance metadata: %v", err)
+		return "", fmt.Errorf("could not retrieve instance metadata: %v", err)
 	}
 
 	for _, device := range instanceMetadata.Devices {
@@ -223,24 +229,27 @@ func GetDevicePath(volumeID string) string {
 			diskPattern := fmt.Sprintf("/dev/disk/by-path/*-%s-%s", device.Bus, device.Address)
 			diskPaths, err := filepath.Glob(diskPattern)
 			if err != nil {
-				klog.Errorf(
-					"could not retrieve disk path for volumeID: %q. Error filepath.Glob(%q): %v",
+				klog.Errorf("Could not retrieve disk path for volumeID: %q. Error filepath.Glob(%q): %v",
 					volumeID, diskPattern, err)
-				return ""
+				return "", fmt.Errorf("could not retrieve disk path for volumeID: %q. Error filepath.Glob(%q): %v",
+					volumeID, diskPattern, err)
 			}
 
 			if len(diskPaths) == 1 {
-				return diskPaths[0]
+				if diskPaths[0] == "" {
+					klog.Errorf("Disk path for volumeID %q is empty", volumeID)
+					return "", fmt.Errorf("disk path for volumeID %q is empty", volumeID)
+				}
+				return diskPaths[0], nil
 			}
 
-			klog.V(4).Infof("expecting to find one disk path for volumeID %q, found %d: %v",
+			klog.Warningf("Expecting to find one disk path for volumeID %q, found %d: %v",
 				volumeID, len(diskPaths), diskPaths)
-
 		}
 	}
 
-	klog.V(4).Infof("Could not retrieve device metadata for volumeID: %q", volumeID)
-	return ""
+	klog.Errorf("Could not retrieve device metadata for volumeID: %q", volumeID)
+	return "", fmt.Errorf("could not retrieve device metadata for volumeID: %q", volumeID)
 }
 
 // Get retrieves metadata from either config drive or metadata service.
@@ -291,4 +300,28 @@ func (m *metadataService) GetAvailabilityZone() (string, error) {
 		return "", err
 	}
 	return md.AvailabilityZone, nil
+}
+
+func CheckMetadataSearchOrder(order string) error {
+	if order == "" {
+		return errors.New("invalid value in section [Metadata] with key `search-order`. Value cannot be empty")
+	}
+
+	elements := strings.Split(order, ",")
+	if len(elements) > 2 {
+		return errors.New("invalid value in section [Metadata] with key `search-order`. Value cannot contain more than 2 elements")
+	}
+
+	for _, id := range elements {
+		id = strings.TrimSpace(id)
+		switch id {
+		case ConfigDriveID:
+		case MetadataID:
+		default:
+			return fmt.Errorf("invalid element %q found in section [Metadata] with key `search-order`."+
+				"Supported elements include %q and %q", id, ConfigDriveID, MetadataID)
+		}
+	}
+
+	return nil
 }
